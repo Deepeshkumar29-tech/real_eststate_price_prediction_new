@@ -1,24 +1,83 @@
 import streamlit as st
 import pandas as pd
 import joblib
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score
+import numpy as np
 
 st.title("🏠 Real Estate Price Prediction")
 
-# Load model
-try:
-    model = joblib.load("model.joblib")
-    st.success("✅ Model loaded successfully!")
-except Exception as e:
-    st.error(f"Error loading model: {e}")
-    st.stop()
+# Option 1: Retrain model with all features
+@st.cache_resource
+def train_model_with_all_features():
+    try:
+        # Load the dataset
+        df = pd.read_csv("real_estate.csv")
+        
+        # Prepare features and target
+        feature_columns = [
+            'area', 'bedrooms', 'bathrooms', 'location_city_center', 
+            'location_suburb', 'location_outskirts', 'has_parking', 
+            'has_garden', 'near_metro', 'property_age'
+        ]
+        
+        X = df[feature_columns]
+        y = df['price']
+        
+        # Train the model
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        model.fit(X, y)
+        
+        # Calculate R² score
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        y_pred = model.predict(X_test)
+        r2 = r2_score(y_test, y_pred)
+        
+        return model, r2, feature_columns
+        
+    except Exception as e:
+        st.error(f"Error training model: {e}")
+        return None, None, None
 
-# Debug: Check model features if available
-try:
-    if hasattr(model, 'feature_names_in_'):
-        st.sidebar.write("**Model Features:**", list(model.feature_names_in_))
-except:
-    pass
+# Option 2: Manual adjustment factors
+def calculate_manual_adjustment(base_price, location, has_parking, has_garden, near_metro, property_age):
+    """Apply manual adjustments based on real estate factors"""
+    
+    # Location multipliers
+    location_multipliers = {
+        "City Center": 1.3,
+        "Suburb": 1.1, 
+        "Outskirts": 0.9
+    }
+    
+    # Feature value adjustments
+    feature_values = {
+        "parking": 500000,  # ₹5,00,000 for parking
+        "garden": 300000,   # ₹3,00,000 for garden
+        "metro": 400000,    # ₹4,00,000 for metro proximity
+    }
+    
+    # Property age depreciation (0.5% per year)
+    age_depreciation = 0.005 * property_age
+    
+    # Calculate adjusted price
+    adjusted_price = base_price * location_multipliers[location]
+    
+    # Add feature values
+    if has_parking:
+        adjusted_price += feature_values["parking"]
+    if has_garden:
+        adjusted_price += feature_values["garden"]
+    if near_metro:
+        adjusted_price += feature_values["metro"]
+    
+    # Apply age depreciation
+    adjusted_price *= (1 - age_depreciation)
+    
+    return adjusted_price
 
+# Main app
 st.write("Enter property details to predict the price:")
 
 # Create two columns for better layout
@@ -43,115 +102,95 @@ with col2:
     has_garden = st.checkbox("Garden", value=False)
     near_metro = st.checkbox("Near Metro Station", value=False)
 
-# Display model performance info
-with st.expander("ℹ️ About the Model"):
-    st.write("""
-    This model is trained on comprehensive real estate data including:
-    - Property specifications (area, bedrooms, bathrooms, age)
-    - Location features (city center, suburb, outskirts)
-    - Amenities (parking, garden, metro proximity)
-    """)
+# Model selection
+st.subheader("🎯 Prediction Method")
+prediction_method = st.radio(
+    "Choose prediction method:",
+    ["Manual Adjustments (Recommended)", "Retrain Model with All Features"],
+    help="Manual adjustments work with your current model but add realistic adjustments for extra features"
+)
 
 if st.button("Predict Price", type="primary"):
-    # Try different feature name combinations based on common patterns
-    feature_combinations = [
-        # Option 1: Original feature names from your CSV
-        {
-            "area": area,
-            "bedrooms": bedrooms, 
-            "bathrooms": bathrooms,
-            "location_city_center": 1 if location == "City Center" else 0,
-            "location_suburb": 1 if location == "Suburb" else 0,
-            "location_outskirts": 1 if location == "Outskirts" else 0,
-            "has_parking": 1 if has_parking else 0,
-            "has_garden": 1 if has_garden else 0,
-            "near_metro": 1 if near_metro else 0,
-            "property_age": property_age
-        },
-        # Option 2: Without underscores
-        {
-            "area": area,
-            "bedrooms": bedrooms, 
-            "bathrooms": bathrooms,
-            "locationcitycenter": 1 if location == "City Center" else 0,
-            "locationsuburb": 1 if location == "Suburb" else 0,
-            "locationoutskirts": 1 if location == "Outskirts" else 0,
-            "hasparking": 1 if has_parking else 0,
-            "hasgarden": 1 if has_garden else 0,
-            "nearmetro": 1 if near_metro else 0,
-            "propertyage": property_age
-        },
-        # Option 3: Basic features only (fallback)
-        {
-            "area": area,
-            "bedrooms": bedrooms, 
-            "bathrooms": bathrooms
-        }
-    ]
-    
-    prediction_made = False
-    
-    for i, input_data in enumerate(feature_combinations):
+    if prediction_method == "Manual Adjustments (Recommended)":
+        # Use current model with manual adjustments
         try:
-            input_df = pd.DataFrame([input_data])
-            prediction = model.predict(input_df)[0]
+            model = joblib.load("model.joblib")
             
-            st.success(f"Estimated Price: **₹ {prediction:,.2f}**")
+            # Get base prediction from current model
+            input_df = pd.DataFrame([{
+                "area": area,
+                "bedrooms": bedrooms, 
+                "bathrooms": bathrooms
+            }])
             
-            # Show which feature set worked
-            if i == 0:
-                st.info("✅ Used full feature set with underscores")
-            elif i == 1:
-                st.info("✅ Used feature set without underscores")
-            else:
-                st.info("✅ Used basic features only (area, bedrooms, bathrooms)")
+            base_prediction = model.predict(input_df)[0]
             
-            # Show feature breakdown
-            st.subheader("📊 Property Details Summary")
+            # Apply manual adjustments for other features
+            final_prediction = calculate_manual_adjustment(
+                base_prediction, location, has_parking, has_garden, near_metro, property_age
+            )
             
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Area", f"{area:,} sqft")
-                st.metric("Bedrooms", bedrooms)
-                st.metric("Bathrooms", bathrooms)
+            st.success(f"Estimated Price: **₹ {final_prediction:,.2f}**")
+            
+            # Show breakdown
+            with st.expander("📊 Price Breakdown"):
+                st.write(f"Base Price (area, bedrooms, bathrooms): ₹ {base_prediction:,.2f}")
+                st.write(f"Location Adjustment ({location}): {['+30%', '+10%', '-10%'][['City Center', 'Suburb', 'Outskirts'].index(location)]}")
+                if has_parking:
+                    st.write("Parking Available: +₹ 5,00,000")
+                if has_garden:
+                    st.write("Garden: +₹ 3,00,000")
+                if near_metro:
+                    st.write("Near Metro: +₹ 4,00,000")
+                st.write(f"Property Age ({property_age} years): -{property_age * 0.5}%")
                 
-            with col2:
-                st.metric("Property Age", f"{property_age} years")
-                st.metric("Location", location)
-                
-            with col3:
-                st.metric("Parking", "✅" if has_parking else "❌")
-                st.metric("Garden", "✅" if has_garden else "❌")
-                st.metric("Near Metro", "✅" if near_metro else "❌")
-            
-            # Location insights
-            st.subheader("📍 Location Insights")
-            if location == "City Center":
-                st.info("Prime city center location typically commands premium pricing due to better accessibility and amenities.")
-            elif location == "Suburb":
-                st.info("Suburban areas offer a balance between convenience and affordability with good community facilities.")
-            else:
-                st.info("Outskirts locations provide more affordable options with peaceful environments and more space.")
-            
-            prediction_made = True
-            break
-            
         except Exception as e:
-            if i == len(feature_combinations) - 1:  # Last attempt
-                st.error(f"❌ Prediction failed with all feature combinations")
-                st.error(f"Error: {e}")
+            st.error(f"Error with manual adjustment method: {e}")
+            
+    else:  # Retrain Model with All Features
+        model, r2_score, feature_columns = train_model_with_all_features()
+        
+        if model is not None:
+            try:
+                # Prepare input data with all features
+                input_data = {
+                    'area': area,
+                    'bedrooms': bedrooms, 
+                    'bathrooms': bathrooms,
+                    'location_city_center': 1 if location == "City Center" else 0,
+                    'location_suburb': 1 if location == "Suburb" else 0,
+                    'location_outskirts': 1 if location == "Outskirts" else 0,
+                    'has_parking': 1 if has_parking else 0,
+                    'has_garden': 1 if has_garden else 0,
+                    'near_metro': 1 if near_metro else 0,
+                    'property_age': property_age
+                }
                 
-                # Debug information
-                with st.expander("🔧 Debug Information"):
-                    st.write("Try these solutions:")
-                    st.write("1. Check if your model.joblib file matches your CSV data")
-                    st.write("2. Retrain your model with the current feature names")
-                    st.write("3. Verify the model was saved correctly")
-                    
-                    # Show what features we tried
-                    st.write("Features tried:")
-                    for j, features in enumerate(feature_combinations):
-                        st.write(f"Option {j+1}: {list(features.keys())}")
+                input_df = pd.DataFrame([input_data])
+                prediction = model.predict(input_df)[0]
+                
+                st.success(f"Estimated Price: **₹ {prediction:,.2f}**")
+                st.info(f"Model R² Score: {r2_score:.3f}")
+                
+            except Exception as e:
+                st.error(f"Error with retrained model: {e}")
+
+# Show feature impact explanation
+with st.expander("💡 How Features Affect Price"):
+    st.write("""
+    **Location Impact:**
+    - 🏙️ City Center: +30% (Premium for accessibility & amenities)
+    - 🏡 Suburb: +10% (Balance of convenience & affordability)  
+    - 🌳 Outskirts: -10% (More affordable, peaceful environment)
+    
+    **Feature Values:**
+    - 🅿️ Parking: +₹5,00,000
+    - 🌿 Garden: +₹3,00,000
+    - 🚇 Metro Proximity: +₹4,00,000
+    
+    **Age Depreciation:**
+    - 0.5% per year (older properties lose value)
+    """)
 
 # Add a section to show training data statistics
 with st.sidebar:
@@ -174,11 +213,6 @@ with st.sidebar:
         st.write(f"• City Center: {city_center}")
         st.write(f"• Suburb: {suburb}")
         st.write(f"• Outskirts: {outskirts}")
-        
-        # Show actual feature names from CSV
-        st.write("---")
-        st.write("**CSV Features:**")
-        st.write(list(train_df.columns))
         
     except Exception as e:
         st.warning("Could not load training data statistics")
